@@ -144,10 +144,16 @@ def analyse(tile) -> TerrainResult:
     # and directly interpretable: "wetter than X% of the surrounding ground".
     flow_percentile = float((acc < site_p90).mean() * 100)
 
-    # drainage bearing: mean downhill direction across the site, as compass deg.
-    # NOTE: verify against the rendered arrows in render/artifact.py before
-    # relying on this in user-facing copy — array row order vs compass north is
-    # easy to get inverted and has not been checked against a known slope.
+    # Drainage bearing: mean downhill direction across the site, compass degrees.
+    #
+    # VERIFIED 2026-07-19 by tests/test_bearing.py against five synthetic slopes
+    # with known downhill directions (N/E/S/W and a NE diagonal). All five match
+    # exactly. The result is CONDITIONAL on the grid being north-up, i.e. row 0
+    # is the northern edge: OpenTopography GeoTIFFs are north-up, tifffile
+    # preserves file row order, and scipy.ndimage.zoom preserves orientation
+    # through the resample, so the chain holds. If a future DEM source returns
+    # south-up or flipped rasters, this bearing silently inverts — re-run the
+    # test before adding any new elevation provider.
     dx, dy = float(np.mean(gx[y0:y1, x0:x1])), float(np.mean(gy[y0:y1, x0:x1]))
     bearing = (np.degrees(np.arctan2(-dx, dy)) + 360) % 360
 
