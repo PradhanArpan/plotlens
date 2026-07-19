@@ -24,3 +24,7 @@ cache/
 out/
 __pycache__/
 *.pyc
+aqkey.txt
+cdsekey.txt
+cdse_test.png
+LAST CMD ERROR.txt
