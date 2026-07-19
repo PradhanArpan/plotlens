@@ -109,21 +109,22 @@ def build_imagery_provider(mode: str = "synthetic", archetype: str = "filled_pon
     """
     Imagery source.
 
-    NOTE: Copernicus Data Space uses OAuth2 (client id + secret), not a single
-    API key. Sentinel2Provider's constructor has never been run against the
-    real service. Verify its signature when CDSE credentials are first added.
+    Copernicus Data Space uses OAuth2 client credentials — a client_id AND a
+    client_secret — not a single API key. The `imagery_key` argument is kept for
+    backwards compatibility with older callers and is treated as the client_id.
     """
     c = credentials()
-    key = imagery_key or c["cdse_id"]
+    cid = imagery_key or c["cdse_id"]
     secret = c["cdse_secret"]
-    want_live = mode == "sentinel2" or (mode == "auto" and key and secret)
+    want_live = mode == "sentinel2" or (mode == "auto" and cid and secret)
     if want_live:
-        if not (key and secret):
+        if not (cid and secret):
             raise ValueError(
                 "Imagery live mode requested but CDSE_CLIENT_ID / "
                 "CDSE_CLIENT_SECRET are not both set."
             )
-        return CachedImagery(Sentinel2Provider(api_key=key), cache_dir="cache"), True
+        inner = Sentinel2Provider(client_id=cid, client_secret=secret)
+        return CachedImagery(inner, cache_dir="cache"), True
     return CachedImagery(SyntheticImagery(archetype=archetype), cache_dir="cache"), False
 
 
