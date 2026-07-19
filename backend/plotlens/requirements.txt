@@ -1,0 +1,19 @@
+# PlotLens backend dependencies
+# Install with:  pip install -r requirements.txt
+#
+# Core (work on all Python versions, needed for the engine + PDF + API):
+numpy
+scipy
+matplotlib
+pillow
+reportlab
+fastapi
+uvicorn
+requests
+#
+# Live data (only needed when you switch from synthetic to real elevation data).
+# rasterio can FAIL to install on the very newest Python (e.g. 3.14) because no
+# prebuilt wheel exists yet. If it errors, skip it for now — the synthetic mode
+# runs the whole pipeline without it. Install separately when ready:
+#   pip install rasterio
+# rasterio

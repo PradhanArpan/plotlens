@@ -1,0 +1,18 @@
+# --- Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- Backend ---
+backend/cache/
+backend/out/
+**/__pycache__/
+*.pyc
+
+# --- Secrets (never commit these) ---
+.env
+*.env
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
