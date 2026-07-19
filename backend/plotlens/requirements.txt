@@ -17,3 +17,6 @@ requests
 # runs the whole pipeline without it. Install separately when ready:
 #   pip install rasterio
 # rasterio
+
+tifffile
+imagecodecs

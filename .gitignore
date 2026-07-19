@@ -16,3 +16,11 @@ backend/out/
 # --- OS junk ---
 .DS_Store
 Thumbs.db
+
+# secrets and local test artifacts
+otkey.txt
+opentopo_test.tif
+cache/
+out/
+__pycache__/
+*.pyc
