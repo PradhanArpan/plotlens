@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   MapPin, Mountain, Loader2, Crosshair, AlertTriangle, CheckCircle2,
   ShieldQuestion, ChevronRight, ChevronDown, Droplets, CloudRain, Route,
-  Trees, Plug, FileText, ArrowRightLeft, Wind,
+  Trees, Plug, FileText, ArrowRightLeft, Wind, Database,
 } from "lucide-react";
 import * as api from "./plotlensApi";
 import PlotMap from "./PlotMap";
