@@ -7,30 +7,43 @@ import {
 import * as api from "./plotlensApi";
 import PlotMap from "./PlotMap";
 
-/* PlotLens v5 — "field record" design system.
-   Visual language borrowed from the subject's own world: Survey of India
-   toposheets and surveyors' field books. Plate-grey paper, pine ink, contour
-   umber, coordinates in mono like a map margin. The verdict is a benchmark
-   stamp over a contour engraving — the one deliberate flourish; everything
-   else is a quiet ledger.
+/* PlotLens v6 — the report as a DOCUMENT.
 
-   Behavior is IDENTICAL to v4: same API contract, same report schema, same
-   PlotMap integration, same mock backend. Only presentation changed.
+   Designed for one reader doing one thing: a buyer reading a single site
+   report end to end before spending a large sum of money. Not a dashboard.
+
+   Consequences of that decision, which drive every layout choice below:
+   - Desktop gets two columns: a sticky summary rail (verdict, headline facts,
+     jump links) beside a single readable column of evidence at ~68ch measure.
+     v5 was a 440px phone column marooned in a 1900px window; that alone made
+     it read as unfinished.
+   - Findings are ordered by CONSEQUENCE, not by data source. Anything flagged
+     or cautioned is grouped first under "What could hurt you", because a buyer
+     scanning for risk should not have to read past "Utilities: Indicative".
+   - Legal sits last and is styled as the closing warning, where it lands
+     hardest.
+   - Monospace marks DATA (coordinates, source tags, figures) and nothing else.
+     v5 used it decoratively for the tagline and labels, which cheapened it.
+   - The header collapses to a slim bar once you scroll past it.
+
+   Behaviour is unchanged from v4/v5: same API contract, same report schema,
+   same PlotMap integration, same mock backend, same null-year and
+   verdict_note handling. Only presentation changed.
    MOCK_API=true returns a complete report for offline UI work. */
 const MOCK_API = false;
 
-/* ---- design tokens (mirrored in CSS custom properties below) ---- */
+/* ---- design tokens ---- */
 const T = {
-  paper: "#EEF1EC", card: "#F9FAF8", ink: "#17251F", faint: "#6C7A72",
-  hair: "#D8DED7", contour: "#8A6A3F",
-  pass: "#2E7D4F", warn: "#A8731B", flag: "#A63A26", check: "#2E6E8E",
+  paper: "#EDF0EA", card: "#FBFCFA", ink: "#16231D", body: "#3A4842",
+  faint: "#6E7C74", hair: "#DCE2DA", rule: "#C6CFC3", contour: "#8A6A3F",
+  pass: "#2C7A4B", warn: "#9E6B15", flag: "#A33720", check: "#2A6785",
 };
 
 const STATUS = {
-  good:    { label: "Looks good",     color: T.pass,  bg: "rgba(46,125,79,0.09)",  icon: CheckCircle2 },
-  caution: { label: "Caution",        color: T.warn,  bg: "rgba(168,115,27,0.10)", icon: AlertTriangle },
-  flag:    { label: "Flag",           color: T.flag,  bg: "rgba(166,58,38,0.10)",  icon: AlertTriangle },
-  check:   { label: "Verify offline", color: T.check, bg: "rgba(46,110,142,0.10)", icon: ShieldQuestion },
+  good:    { label: "Looks good",     short: "Clear",   color: T.pass,  bg: "rgba(44,122,75,0.09)",  icon: CheckCircle2, rank: 0 },
+  caution: { label: "Caution",        short: "Caution", color: T.warn,  bg: "rgba(158,107,21,0.10)", icon: AlertTriangle, rank: 2 },
+  flag:    { label: "Flag",           short: "Flag",    color: T.flag,  bg: "rgba(163,55,32,0.10)",  icon: AlertTriangle, rank: 3 },
+  check:   { label: "Verify offline", short: "Verify",  color: T.check, bg: "rgba(42,103,133,0.10)", icon: ShieldQuestion, rank: 1 },
 };
 const SRC = { derived: { t: "Satellite-derived", c: T.pass },
               partial: { t: "Indicative", c: T.warn },
@@ -39,7 +52,6 @@ const SRC = { derived: { t: "Satellite-derived", c: T.pass },
               // means data satellites fundamentally cannot see (legal title).
               unavailable: { t: "Not connected yet", c: "#8A8E86" } };
 
-// Maps icon names (strings) from the live backend to icon components.
 const ICONS = { Mountain, Droplets, CloudRain, Route, Trees, ArrowRightLeft, Plug, FileText, Wind, Database };
 function resolveIcon(icon) {
   if (typeof icon === "string") return ICONS[icon] || Mountain;
@@ -118,10 +130,7 @@ const call = {
   get: (id) => MOCK_API ? Promise.resolve(mockBackend.get(id)) : api.getReport(id),
 };
 
-/* Reverse geocoding: dropped pins arrive labelled with raw coordinates.
-   We resolve a human place name via Nominatim (already the app's search
-   provider; free, keyless) and fall back to the coordinates silently on any
-   failure. Cached per rounded coordinate so repeat views cost nothing. */
+/* ---------- small shared pieces ---------- */
 const _placeCache = {};
 function looksLikeCoords(label) {
   return !label || /^-?\d+\.\d+\s*,\s*-?\d+\.\d+$/.test(label.trim());
@@ -135,6 +144,9 @@ function compactPlace(addr) {
   if (local && city && local !== city) return `${local}, ${city}`;
   return local || city || null;
 }
+/* Dropped pins arrive labelled with raw coordinates. Resolve a human place
+   name via Nominatim (already the app's search provider; free, keyless) and
+   fall back to the coordinates silently on any failure. */
 function usePlaceName(pin) {
   const [name, setName] = useState(null);
   useEffect(() => {
@@ -148,11 +160,9 @@ function usePlaceName(pin) {
     fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&lat=${pin.lat}&lon=${pin.lng}`,
           { signal: ctl.signal, headers: { "Accept": "application/json" } })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const p = compactPlace(d && d.address);
-        if (p) { _placeCache[key] = p; if (live) setName(p); }
-      })
-      .catch(() => {})              // silent fallback: coordinates stay as title
+      .then((d) => { const p = compactPlace(d && d.address);
+                     if (p) { _placeCache[key] = p; if (live) setName(p); } })
+      .catch(() => {})
       .finally(() => clearTimeout(t));
     return () => { live = false; ctl.abort(); };
   }, [pin]);
@@ -160,33 +170,43 @@ function usePlaceName(pin) {
   return looksLikeCoords(pin.label) ? name : pin.label;
 }
 
-/* Coordinates set like a toposheet margin: 12.9698° N · 77.7499° E */
 function Coord({ lat, lng }) {
   if (lat == null) return null;
   return (
     <span className="pl-coord">
-      {Math.abs(lat).toFixed(4)}° {lat >= 0 ? "N" : "S"}
-      <span className="pl-coord-dot">·</span>
-      {Math.abs(lng).toFixed(4)}° {lng >= 0 ? "E" : "W"}
+      {Math.abs(lat).toFixed(4)}°{lat >= 0 ? "N" : "S"}
+      <span className="pl-coord-sep">/</span>
+      {Math.abs(lng).toFixed(4)}°{lng >= 0 ? "E" : "W"}
     </span>
   );
 }
 
-/* The signature: a contour engraving. Irregular nested rings, umber, faint. */
+/* Contour engraving — the one flourish, behind the verdict. */
 function ContourPlate() {
   return (
-    <svg className="pl-contours" viewBox="0 0 420 150" aria-hidden="true" focusable="false">
-      <g fill="none" stroke={T.contour} strokeWidth="0.8">
-        <path opacity="0.28" d="M330 150 C280 120 300 78 355 66 C412 54 452 92 445 150" />
-        <path opacity="0.22" d="M310 150 C255 108 282 52 356 40 C430 28 478 84 470 150" />
-        <path opacity="0.16" d="M288 150 C228 96 262 26 358 14 C452 3 505 76 498 150" />
-        <path opacity="0.11" d="M264 150 C200 84 240 0 360 -12 C476 -22 532 68 526 150" />
-        <path opacity="0.30" d="M-20 150 C-8 112 44 100 78 118 C108 134 112 150 112 150" />
-        <path opacity="0.20" d="M-20 128 C0 92 58 76 102 100 C136 118 142 150 142 150" />
-        <path opacity="0.13" d="M-20 104 C10 68 74 50 126 82 C162 104 170 150 170 150" />
+    <svg className="pl-contours" viewBox="0 0 460 190" preserveAspectRatio="xMaxYMid slice" aria-hidden="true" focusable="false">
+      <g fill="none" stroke={T.contour} strokeWidth="0.9">
+        <path opacity="0.26" d="M352 190 C300 156 322 104 384 90 C448 76 492 120 484 190" />
+        <path opacity="0.20" d="M330 190 C268 140 300 74 382 60 C464 46 518 108 510 190" />
+        <path opacity="0.14" d="M306 190 C238 124 276 40 380 26 C484 12 542 96 534 190" />
+        <path opacity="0.09" d="M280 190 C204 108 248 4 378 -10 C506 -24 568 84 562 190" />
       </g>
     </svg>
   );
+}
+
+/* Findings are grouped by consequence, not by data source. */
+function groupCategories(cats) {
+  const risk = [], verify = [], clear = [], legal = [];
+  cats.forEach((c) => {
+    const isLegal = /legal|development rules/i.test(c.title);
+    if (isLegal) { legal.push(c); return; }
+    const r = (STATUS[c.status] || STATUS.good).rank;
+    if (r >= 2) risk.push(c);
+    else if (r === 1) verify.push(c);
+    else clear.push(c);
+  });
+  return { risk, verify, clear, legal };
 }
 
 export default function PlotLensApp() {
@@ -194,10 +214,18 @@ export default function PlotLensApp() {
   const [pin, setPin] = useState(null);
   const [report, setReport] = useState(null);
   const [err, setErr] = useState(null);
+  const [scrolled, setScrolled] = useState(false);
   const poll = useRef(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const start = async (p) => {
     setPin(p); setErr(null); setReport(null); setScreen("loading");
+    window.scrollTo({ top: 0 });
     try {
       const { job_id } = await call.create({ lat: p.lat, lng: p.lng, archetype: p.archetype });
       poll.current = true;
@@ -214,24 +242,32 @@ export default function PlotLensApp() {
   };
   useEffect(() => () => { poll.current = false; }, []);
 
+  const home = () => { poll.current = false; setScreen("map"); window.scrollTo({ top: 0 }); };
+
   return (
     <div className="pl-app">
       <style>{CSS}</style>
-      <header className="pl-header" onClick={() => { poll.current = false; setScreen("map"); }}>
-        <div className="pl-mark"><Crosshair size={17} strokeWidth={2.2} /></div>
-        <div className="pl-brand">
-          <div className="pl-brand-name">PLOTLENS</div>
-          <div className="pl-brand-sub">Read the ground before you buy</div>
-        </div>
-        {MOCK_API && <span className="pl-mock">MOCK</span>}
+      <header className={"pl-header" + (scrolled ? " pl-header-slim" : "")}>
+        <button className="pl-brandbtn" onClick={home} aria-label="Back to map">
+          <span className="pl-mark"><Crosshair size={16} strokeWidth={2.3} /></span>
+          <span className="pl-brand">
+            <span className="pl-brand-name">PlotLens</span>
+            <span className="pl-brand-sub">Read the ground before you buy</span>
+          </span>
+        </button>
+        {MOCK_API && <span className="pl-mock">MOCK DATA</span>}
       </header>
 
       {screen === "map" && <MapScreen onPick={start} />}
       {screen === "loading" && <LoadingScreen pin={pin} />}
-      {screen === "report" && <Report pin={pin} report={report} err={err} onBack={() => setScreen("map")} />}
+      {screen === "report" && <Report pin={pin} report={report} err={err} onBack={home} />}
 
       <footer className="pl-footer">
-        Indicators are derived from public satellite, elevation and map data and are indicative only — not a guarantee, nor a substitute for a site survey, soil test, or legal title check.
+        <div className="pl-footer-inner">
+          Indicators are derived from public satellite, elevation and map data and are
+          indicative only — not a guarantee, nor a substitute for a site survey, soil
+          test, or legal title check.
+        </div>
       </footer>
     </div>
   );
@@ -239,82 +275,194 @@ export default function PlotLensApp() {
 
 function MapScreen({ onPick }) {
   return (
-    <main className="pl-main">
+    <main className="pl-main pl-main-map">
+      <div className="pl-lede">
+        <h1 className="pl-lede-h">Check the ground<br />before you buy it.</h1>
+        <p className="pl-lede-p">
+          Drop a pin on any plot in India. PlotLens reads public satellite,
+          elevation and map data and tells you what the land itself says —
+          drainage, access, what changed since 2017, and what no satellite can
+          see.
+        </p>
+      </div>
       <div className="pl-mapframe"><PlotMap onPick={onPick} samples={PINS} /></div>
-      <div className="pl-eyebrow">Or pick a sample plot</div>
-      {PINS.map((p) => (
-        <button key={p.key} onClick={() => onPick(p)} className="pl-sample">
-          <div className="pl-sample-text">
-            <div className="pl-sample-name">{p.label}</div>
-            <Coord lat={p.lat} lng={p.lng} />
-          </div>
-          <ChevronRight size={17} className="pl-chev" />
-        </button>
-      ))}
+      <div className="pl-rule"><span>Or open a sample report</span></div>
+      <div className="pl-samples">
+        {PINS.map((p) => (
+          <button key={p.key} onClick={() => onPick(p)} className="pl-sample">
+            <span className="pl-sample-text">
+              <span className="pl-sample-name">{p.label}</span>
+              <Coord lat={p.lat} lng={p.lng} />
+            </span>
+            <ChevronRight size={16} className="pl-chev" />
+          </button>
+        ))}
+      </div>
     </main>
   );
 }
 
 function LoadingScreen({ pin }) {
   const place = usePlaceName(pin);
-  const steps = ["Submitting coordinates", "Fetching elevation & imagery", "Computing terrain & flow", "Scoring site categories"];
+  const steps = ["Submitting coordinates", "Fetching elevation & imagery",
+                 "Computing terrain & flow", "Scoring site categories"];
   const [i, setI] = useState(0);
-  useEffect(() => { const t = setInterval(() => setI((v) => (v + 1) % steps.length), 450); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const t = setInterval(() => setI((v) => (v + 1) % steps.length), 900);
+    return () => clearInterval(t);
+  }, []);
   return (
     <main className="pl-main pl-loading">
-      <Loader2 size={30} className="spin" color={T.contour} />
+      <Loader2 size={26} className="spin" color={T.contour} />
       <div className="pl-loading-site">{place || pin?.label}</div>
       <Coord lat={pin?.lat} lng={pin?.lng} />
-      <div className="pl-loading-step">{steps[i]}…</div>
+      <ol className="pl-steps">
+        {steps.map((s, k) => (
+          <li key={s} className={k < i ? "done" : k === i ? "now" : ""}>{s}</li>
+        ))}
+      </ol>
     </main>
   );
 }
 
 function Report({ pin, report, err, onBack }) {
   const place = usePlaceName(pin);
+
   if (err) return (
-    <main className="pl-main pl-enter">
+    <main className="pl-main">
       <button onClick={onBack} className="pl-back">← Back to map</button>
-      <div className="pl-verdict" style={{ borderColor: STATUS.flag.color }}>
-        <ContourPlate />
-        <div className="pl-verdict-inner">
-          <div className="pl-verdict-eyebrow">Survey record</div>
-          <div className="pl-verdict-word" style={{ color: STATUS.flag.color }}>Report failed</div>
-          <div className="pl-verdict-note">{err}</div>
+      <div className="pl-doc">
+        <div className="pl-verdict pl-verdict-err">
+          <div className="pl-verdict-inner">
+            <div className="pl-kicker">Survey record</div>
+            <div className="pl-verdict-word" style={{ color: STATUS.flag.color }}>Report failed</div>
+            <p className="pl-verdict-note">{err}</p>
+          </div>
         </div>
       </div>
     </main>
   );
   if (!report) return null;
+
   const st = STATUS[report.overall] || STATUS.good;
   const HIcon = st.icon;
+  const { risk, verify, clear, legal } = groupCategories(report.categories);
+  const headline = pickHeadlineFacts(report);
 
   return (
-    <main className="pl-main pl-enter">
+    <main className="pl-main pl-report">
       <button onClick={onBack} className="pl-back">← Back to map</button>
-      <h1 className="pl-title">{place || pin?.label}</h1>
-      <div className="pl-title-coord"><MapPin size={12} /> <Coord lat={pin?.lat} lng={pin?.lng} /></div>
 
-      <div className="pl-verdict" style={{ borderColor: st.color }}>
-        <ContourPlate />
-        <div className="pl-verdict-inner">
-          <div className="pl-verdict-eyebrow">Overall read</div>
-          <div className="pl-verdict-line">
-            <span className="pl-verdict-stamp" style={{ color: st.color, borderColor: st.color }}>
-              <HIcon size={15} strokeWidth={2.4} /> {st.label}
-            </span>
+      <div className="pl-layout">
+        {/* -------- sticky summary rail -------- */}
+        <aside className="pl-rail">
+          <div className="pl-rail-inner">
+            <div className="pl-kicker">Site</div>
+            <h1 className="pl-title">{place || pin?.label}</h1>
+            <div className="pl-title-coord">
+              <MapPin size={11} /> <Coord lat={pin?.lat} lng={pin?.lng} />
+            </div>
+
+            <div className="pl-railverdict" style={{ borderColor: st.color, background: st.bg }}>
+              <HIcon size={15} strokeWidth={2.4} color={st.color} />
+              <span style={{ color: st.color }}>{st.label}</span>
+            </div>
+
+            {headline.length > 0 && (
+              <dl className="pl-facts">
+                {headline.map(([k, v]) => (
+                  <div key={k} className="pl-fact">
+                    <dt>{k}</dt><dd>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+
+            <nav className="pl-jump" aria-label="Sections">
+              {risk.length > 0 && <a href="#s-risk">What could hurt you <span>{risk.length}</span></a>}
+              {verify.length > 0 && <a href="#s-verify">To verify <span>{verify.length}</span></a>}
+              {clear.length > 0 && <a href="#s-clear">Nothing adverse found <span>{clear.length}</span></a>}
+              {legal.length > 0 && <a href="#s-legal">Before you pay</a>}
+            </nav>
           </div>
-          {report.verdict_note && <div className="pl-verdict-note">{report.verdict_note}</div>}
+        </aside>
+
+        {/* -------- document column -------- */}
+        <div className="pl-doc">
+          <section className="pl-verdict" style={{ borderColor: st.color }}>
+            <ContourPlate />
+            <div className="pl-verdict-inner">
+              <div className="pl-kicker">Overall read</div>
+              <div className="pl-stamp" style={{ color: st.color, borderColor: st.color }}>
+                <HIcon size={17} strokeWidth={2.4} /> {st.label}
+              </div>
+              {report.verdict_note && <p className="pl-verdict-note">{report.verdict_note}</p>}
+            </div>
+          </section>
+
+          <ThenNow report={report} />
+
+          {risk.length > 0 && (
+            <Section id="s-risk" title="What could hurt you" tone={T.flag}
+                     blurb="Findings that a buyer should resolve before committing money.">
+              {risk.map((c, i) => <Category key={i} cat={c} defaultOpen />)}
+            </Section>
+          )}
+
+          {verify.length > 0 && (
+            <Section id="s-verify" title="To verify on the ground" tone={T.check}
+                     blurb="Indicative or unconnected data. Absence of a warning here is not an all-clear.">
+              {verify.map((c, i) => <Category key={i} cat={c} />)}
+            </Section>
+          )}
+
+          {clear.length > 0 && (
+            <Section id="s-clear" title="Nothing adverse found" tone={T.pass}
+                     blurb="Measured, and within normal ranges for this area.">
+              {clear.map((c, i) => <Category key={i} cat={c} />)}
+            </Section>
+          )}
+
+          {legal.length > 0 && (
+            <Section id="s-legal" title="Before you pay" tone={T.check}
+                     blurb="No satellite can see any of this. It is also where buyers lose the most money.">
+              {legal.map((c, i) => <Category key={i} cat={c} defaultOpen />)}
+            </Section>
+          )}
         </div>
       </div>
-
-      <ThenNow report={report} />
-
-      <div className="pl-eyebrow">Site analysis · {report.categories.length} categories</div>
-      <div className="pl-ledger">
-        {report.categories.map((c, i) => <Category key={i} cat={c} defaultOpen={i < 2} />)}
-      </div>
     </main>
+  );
+}
+
+/* Pull a few headline numbers for the rail. Reads whatever the backend sent —
+   no assumptions about which categories exist. */
+function pickHeadlineFacts(report) {
+  const out = [];
+  const find = (title, key) => {
+    const c = report.categories.find((x) => new RegExp(title, "i").test(x.title));
+    if (!c) return null;
+    const row = c.rows.find((r) => new RegExp(key, "i").test(r[0]));
+    return row ? row[1] : null;
+  };
+  const elev = find("topography", "^elevation");
+  const slope = find("topography", "^slope");
+  const road = find("circulation|access", "nearest road");
+  const aqi = find("air quality", "^aqi");
+  if (elev) out.push(["Elevation", elev]);
+  if (slope) out.push(["Slope", slope]);
+  if (road) out.push(["Nearest road", road]);
+  if (aqi) out.push(["Air quality", aqi]);
+  return out.slice(0, 4);
+}
+
+function Section({ id, title, tone, blurb, children }) {
+  return (
+    <section className="pl-section" id={id}>
+      <h2 className="pl-h2" style={{ borderColor: tone }}>{title}</h2>
+      {blurb && <p className="pl-blurb">{blurb}</p>}
+      {children}
+    </section>
   );
 }
 
@@ -323,7 +471,7 @@ function ThenNow({ report }) {
   const t = report.then, n = report.now;
   return (
     <section className="pl-tn">
-      <div className="pl-tn-head"><ArrowRightLeft size={14} /> What changed here</div>
+      <h2 className="pl-h2 pl-h2-plain"><ArrowRightLeft size={15} /> What changed here</h2>
       <div className="pl-tn-frame">
         <div className="pl-tn-layer" style={{ background: grad(n.tint) }}>
           {n.year && <span className="pl-tn-year">{n.year}</span>}
@@ -331,14 +479,18 @@ function ThenNow({ report }) {
         <div className="pl-tn-layer pl-tn-top" style={{ width: `${pos}%`, background: grad(t.tint) }}>
           {t.year && <span className="pl-tn-year">{t.year}</span>}
         </div>
+        <div className="pl-tn-handle" style={{ left: `${pos}%` }} aria-hidden="true" />
         <input type="range" min="0" max="100" value={pos} onChange={(e) => setPos(+e.target.value)}
                className="pl-tn-range" aria-label="Compare years" />
       </div>
       <div className="pl-tn-caps">
-        <span>{t.year ? <b>{t.year} · </b> : null}{t.cover}</span>
-        <span>{n.year ? <b>{n.year} · </b> : null}{n.cover}</span>
+        <span>{t.year ? <b>{t.year}</b> : null}{t.year ? " · " : ""}{t.cover}</span>
+        <span>{n.year ? <b>{n.year}</b> : null}{n.year ? " · " : ""}{n.cover}</span>
       </div>
-      <div className="pl-tn-note">Computed artifacts (terrain flow map, access rings, then-vs-now panel) are generated by the backend but not yet displayed in this view.</div>
+      <p className="pl-tn-note">
+        Computed artifacts (terrain flow map, access rings, then-vs-now panel) are
+        generated by the backend but not yet displayed in this view.
+      </p>
     </section>
   );
 }
@@ -348,168 +500,268 @@ function Category({ cat, defaultOpen }) {
   const st = STATUS[cat.status] || STATUS.good;
   const src = SRC[cat.source];
   const Ic = resolveIcon(cat.icon);
+  const reading = cat.rows.find((r) => /^reading$/i.test(r[0]));
+  const rows = cat.rows.filter((r) => r !== reading);
   return (
-    <div className="pl-cat" style={{ borderLeftColor: st.color }}>
+    <article className={"pl-cat" + (open ? " open" : "")} style={{ "--rail": st.color }}>
       <button className="pl-cat-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <div className="pl-cat-icon" style={{ background: st.bg }}><Ic size={16} color={st.color} /></div>
-        <div className="pl-cat-text">
-          <div className="pl-cat-title">{cat.title}</div>
-          <div className="pl-cat-src" style={{ color: src.c }}>{src.t}</div>
-        </div>
-        <span className="pl-status" style={{ color: st.color, background: st.bg }}>{st.label}</span>
-        {open ? <ChevronDown size={16} className="pl-chev" /> : <ChevronRight size={16} className="pl-chev" />}
+        <span className="pl-cat-icon" style={{ background: st.bg }}><Ic size={15} color={st.color} /></span>
+        <span className="pl-cat-text">
+          <span className="pl-cat-title">{cat.title}</span>
+          <span className="pl-cat-src" style={{ color: src.c }}>{src.t}</span>
+        </span>
+        <span className="pl-status" style={{ color: st.color, background: st.bg }}>{st.short}</span>
+        {open ? <ChevronDown size={15} className="pl-chev" /> : <ChevronRight size={15} className="pl-chev" />}
       </button>
       {open && (
         <div className="pl-cat-body">
-          {cat.rows.map(([k, v], i) => (
-            <div key={i} className={"pl-row" + (i === cat.rows.length - 1 && !cat.offline_note ? " pl-row-last" : "")}>
-              <span className="pl-row-key">{k}</span><span className="pl-row-val">{v}</span>
-            </div>
-          ))}
+          {reading && <p className="pl-reading">{reading[1]}</p>}
+          {rows.length > 0 && (
+            <dl className="pl-rows">
+              {rows.map(([k, v], i) => (
+                <div key={i} className="pl-row"><dt>{k}</dt><dd>{v}</dd></div>
+              ))}
+            </dl>
+          )}
           {cat.offline_note && (
-            <div className="pl-offline"><ShieldQuestion size={14} className="pl-offline-ic" /><span>{cat.offline_note}</span></div>
+            <div className="pl-offline">
+              <ShieldQuestion size={14} className="pl-offline-ic" /><span>{cat.offline_note}</span>
+            </div>
           )}
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
-const grad = (c) => `linear-gradient(135deg, ${c}, ${shade(c, -18)})`;
-function shade(hex, amt) { const n = parseInt(hex.slice(1), 16); let r = Math.max(0, Math.min(255, (n >> 16) + amt)), g = Math.max(0, Math.min(255, ((n >> 8) & 255) + amt)), b = Math.max(0, Math.min(255, (n & 255) + amt)); return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`; }
+const grad = (c) => `linear-gradient(140deg, ${c}, ${shade(c, -20)})`;
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.max(0, Math.min(255, (n >> 16) + amt));
+  const g = Math.max(0, Math.min(255, ((n >> 8) & 255) + amt));
+  const b = Math.max(0, Math.min(255, (n & 255) + amt));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
-  --paper: ${T.paper}; --card: ${T.card}; --ink: ${T.ink}; --faint: ${T.faint};
-  --hair: ${T.hair}; --contour: ${T.contour};
-  --display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
-  --body: 'Public Sans', system-ui, sans-serif;
+  --paper: ${T.paper}; --card: ${T.card}; --ink: ${T.ink}; --body: ${T.body};
+  --faint: ${T.faint}; --hair: ${T.hair}; --rule: ${T.rule}; --contour: ${T.contour};
+  --serif: 'Fraunces', Georgia, serif;
+  --sans: 'Public Sans', system-ui, -apple-system, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --measure: 68ch;
 }
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 90px; }
 body { margin: 0; background: var(--paper); }
 
-.pl-app { max-width: 440px; margin: 0 auto; min-height: 100vh; background: var(--paper);
-  color: var(--ink); font-family: var(--body); display: flex; flex-direction: column; }
+.pl-app { min-height: 100vh; background: var(--paper); color: var(--body);
+  font-family: var(--sans); font-size: 15px; line-height: 1.6;
+  display: flex; flex-direction: column; }
 
-/* ---- header: map-margin ---- */
-.pl-header { display: flex; align-items: center; gap: 11px; padding: 14px 18px;
-  border-bottom: 1.5px solid var(--ink); cursor: pointer; position: sticky; top: 0;
-  background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(8px); z-index: 600; }
-.pl-mark { width: 34px; height: 34px; background: var(--ink); color: var(--paper);
-  display: grid; place-items: center; border-radius: 4px; }
-.pl-brand-name { font-family: var(--display); font-weight: 700; font-size: 21px;
-  letter-spacing: 0.10em; line-height: 1; }
-.pl-brand-sub { font-family: var(--mono); font-size: 10px; color: var(--faint);
-  letter-spacing: 0.04em; margin-top: 3px; }
-.pl-mock { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 500;
+/* ---------- header: full, then slim on scroll ---------- */
+.pl-header { position: sticky; top: 0; z-index: 800;
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 32px; border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(10px); transition: padding .18s ease; }
+.pl-header-slim { padding: 9px 32px; }
+.pl-brandbtn { display: flex; align-items: center; gap: 11px; background: none;
+  border: none; padding: 0; cursor: pointer; color: inherit; font: inherit; }
+.pl-mark { width: 30px; height: 30px; background: var(--ink); color: var(--paper);
+  display: grid; place-items: center; border-radius: 5px; flex-shrink: 0;
+  transition: transform .18s ease; }
+.pl-header-slim .pl-mark { transform: scale(.86); }
+.pl-brand { display: flex; flex-direction: column; align-items: flex-start; }
+.pl-brand-name { font-family: var(--serif); font-weight: 700; font-size: 19px;
+  letter-spacing: -0.01em; color: var(--ink); line-height: 1.1; }
+.pl-brand-sub { font-size: 12px; color: var(--faint); margin-top: 1px;
+  max-height: 20px; opacity: 1; transition: max-height .18s ease, opacity .14s ease; }
+.pl-header-slim .pl-brand-sub { max-height: 0; opacity: 0; overflow: hidden; }
+.pl-mock { margin-left: auto; font-family: var(--mono); font-size: 10px;
   color: ${T.warn}; border: 1px solid ${T.warn}; padding: 2px 7px; border-radius: 3px; }
 
-.pl-main { flex: 1; padding: 18px 18px 8px; }
-.pl-footer { font-size: 11px; line-height: 1.55; color: var(--faint);
-  padding: 16px 20px 26px; border-top: 1px solid var(--hair); margin-top: 12px; }
+.pl-main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto;
+  padding: 34px 32px 10px; }
+.pl-footer { border-top: 1px solid var(--hair); margin-top: 40px; }
+.pl-footer-inner { max-width: 1180px; margin: 0 auto; padding: 20px 32px 34px;
+  font-size: 12.5px; color: var(--faint); max-width: 78ch; }
 
-/* ---- shared small pieces ---- */
-.pl-eyebrow { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em;
-  text-transform: uppercase; color: var(--faint); margin: 18px 0 9px;
-  display: flex; align-items: center; gap: 10px; }
-.pl-eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--hair); }
-.pl-coord { font-family: var(--mono); font-size: 11.5px; color: var(--faint); letter-spacing: 0.01em; }
-.pl-coord-dot { margin: 0 6px; color: var(--contour); }
-.pl-chev { color: #9AA59D; flex-shrink: 0; }
+/* ---------- landing ---------- */
+.pl-main-map { max-width: 860px; }
+.pl-lede { margin-bottom: 26px; }
+.pl-lede-h { font-family: var(--serif); font-weight: 700; font-size: 40px;
+  line-height: 1.08; letter-spacing: -0.022em; color: var(--ink); margin: 0 0 12px; }
+.pl-lede-p { max-width: 56ch; font-size: 15.5px; color: var(--body); margin: 0; }
+.pl-mapframe { border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(22,35,29,.05), 0 8px 24px -18px rgba(22,35,29,.35); }
+.pl-rule { display: flex; align-items: center; gap: 14px; margin: 26px 0 12px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--faint); }
+.pl-rule::before, .pl-rule::after { content: ""; flex: 1; height: 1px; background: var(--hair); }
+.pl-samples { display: grid; gap: 8px; }
+.pl-sample { display: flex; align-items: center; gap: 12px; width: 100%;
+  text-align: left; background: var(--card); border: 1px solid var(--hair);
+  border-radius: 6px; padding: 13px 15px; cursor: pointer; font: inherit;
+  color: var(--ink); transition: border-color .14s, transform .14s; }
+.pl-sample:hover { border-color: var(--contour); transform: translateX(2px); }
+.pl-sample-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.pl-sample-name { font-weight: 600; font-size: 14.5px; }
 
-/* ---- map screen ---- */
-.pl-mapframe { border: 1px solid var(--hair); border-radius: 6px; overflow: hidden; }
-.pl-sample { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  background: var(--card); border: 1px solid var(--hair); border-left: 3px solid var(--contour);
-  border-radius: 4px; padding: 12px 13px; cursor: pointer; margin-bottom: 8px;
-  font-family: var(--body); color: var(--ink); transition: border-color .15s; }
-.pl-sample:hover { border-color: var(--contour); }
-.pl-sample-text { flex: 1; }
-.pl-sample-name { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
-
-/* ---- loading ---- */
+/* ---------- loading ---------- */
 .pl-loading { display: flex; flex-direction: column; align-items: center;
-  justify-content: center; min-height: 55vh; gap: 12px; }
-.pl-loading-site { font-weight: 600; }
-.pl-loading-step { font-family: var(--mono); color: var(--faint); font-size: 13px; }
+  justify-content: center; min-height: 58vh; gap: 10px; text-align: center; }
+.pl-loading-site { font-family: var(--serif); font-weight: 600; font-size: 22px;
+  color: var(--ink); }
+.pl-steps { list-style: none; padding: 0; margin: 18px 0 0; font-family: var(--mono);
+  font-size: 12.5px; color: var(--faint); text-align: left; }
+.pl-steps li { padding: 3px 0 3px 20px; position: relative; opacity: .45; }
+.pl-steps li.done, .pl-steps li.now { opacity: 1; }
+.pl-steps li.done::before { content: "✓"; position: absolute; left: 0; color: ${T.pass}; }
+.pl-steps li.now::before { content: "▸"; position: absolute; left: 0; color: var(--contour); }
 
-/* ---- report ---- */
-.pl-back { background: none; border: none; color: var(--faint); font-size: 13px;
-  cursor: pointer; padding: 0; margin-bottom: 10px; font-family: var(--body); }
-.pl-title { font-family: var(--display); font-weight: 700; font-size: 27px;
-  letter-spacing: 0.03em; margin: 0 0 5px; line-height: 1.05; text-transform: uppercase; }
-.pl-title-coord { display: flex; align-items: center; gap: 5px; color: var(--faint); margin-bottom: 16px; }
+/* ---------- report: two columns ---------- */
+.pl-report { padding-bottom: 30px; }
+.pl-back { background: none; border: none; color: var(--faint); font: inherit;
+  font-size: 13.5px; cursor: pointer; padding: 0; margin-bottom: 16px; }
+.pl-back:hover { color: var(--ink); }
+.pl-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 46px;
+  align-items: start; }
+.pl-rail-inner { position: sticky; top: 96px; }
+.pl-doc { max-width: var(--measure); }
 
-/* verdict: benchmark stamp over contour engraving — the signature */
+.pl-kicker { font-family: var(--mono); font-size: 10px; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.pl-title { font-family: var(--serif); font-weight: 700; font-size: 25px;
+  line-height: 1.14; letter-spacing: -0.018em; color: var(--ink); margin: 0 0 5px; }
+.pl-title-coord { display: flex; align-items: center; gap: 5px; color: var(--faint);
+  margin-bottom: 16px; }
+.pl-coord { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.pl-coord-sep { margin: 0 5px; color: var(--rule); }
+
+.pl-railverdict { display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid; border-radius: 5px; padding: 6px 11px; font-weight: 600;
+  font-size: 13.5px; margin-bottom: 18px; }
+
+.pl-facts { margin: 0 0 18px; padding: 14px 0 4px; border-top: 1px solid var(--hair); }
+.pl-fact { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.pl-fact dt { font-size: 12.5px; color: var(--faint); margin: 0; }
+.pl-fact dd { margin: 0; font-family: var(--mono); font-size: 12.5px; color: var(--ink);
+  text-align: right; font-variant-numeric: tabular-nums; }
+
+.pl-jump { display: flex; flex-direction: column; border-top: 1px solid var(--hair);
+  padding-top: 10px; }
+.pl-jump a { display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; padding: 7px 0; font-size: 13.5px; color: var(--body);
+  text-decoration: none; border-bottom: 1px solid transparent; }
+.pl-jump a:hover { color: var(--ink); border-bottom-color: var(--hair); }
+.pl-jump span { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* verdict block */
 .pl-verdict { position: relative; overflow: hidden; background: var(--card);
-  border: 1.5px solid; border-radius: 6px; padding: 16px 16px 15px; margin-bottom: 18px; }
-.pl-contours { position: absolute; right: -30px; bottom: 0; width: 115%; height: 100%;
+  border: 1px solid; border-left-width: 3px; border-radius: 7px;
+  padding: 20px 22px; margin-bottom: 30px; }
+.pl-verdict-err { border-color: ${T.flag}; }
+.pl-contours { position: absolute; right: 0; top: 0; height: 100%; width: 55%;
   pointer-events: none; }
 .pl-verdict-inner { position: relative; }
-.pl-verdict-eyebrow { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em;
-  text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
-.pl-verdict-line { margin: 2px 0 0; }
-.pl-verdict-stamp { display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: 0.06em;
-  text-transform: uppercase; border: 2px solid; border-radius: 4px; padding: 4px 12px 5px;
-  transform: rotate(-1.2deg); background: color-mix(in srgb, var(--card) 65%, transparent); }
-.pl-verdict-word { font-family: var(--display); font-weight: 700; font-size: 22px;
-  letter-spacing: 0.05em; text-transform: uppercase; }
-.pl-verdict-note { font-size: 12.5px; color: var(--faint); margin-top: 10px;
-  line-height: 1.5; max-width: 46ch; }
+.pl-stamp { display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--serif); font-weight: 700; font-size: 21px; letter-spacing: -0.01em;
+  border: 2px solid; border-radius: 5px; padding: 5px 14px 6px;
+  transform: rotate(-0.8deg); background: color-mix(in srgb, var(--card) 70%, transparent); }
+.pl-verdict-word { font-family: var(--serif); font-weight: 700; font-size: 21px; }
+.pl-verdict-note { font-size: 13.5px; color: var(--faint); margin: 13px 0 0;
+  max-width: 52ch; }
+
+/* section headings */
+.pl-section { margin-bottom: 34px; }
+.pl-h2 { font-family: var(--serif); font-weight: 600; font-size: 20px;
+  letter-spacing: -0.012em; color: var(--ink); margin: 0 0 6px;
+  padding-left: 12px; border-left: 3px solid; line-height: 1.25; }
+.pl-h2-plain { border: none; padding: 0; display: flex; align-items: center; gap: 8px;
+  font-size: 17px; margin-bottom: 12px; }
+.pl-blurb { font-size: 13.5px; color: var(--faint); margin: 0 0 14px;
+  padding-left: 15px; max-width: 56ch; }
 
 /* then / now */
-.pl-tn { margin-bottom: 4px; }
-.pl-tn-head { display: flex; align-items: center; gap: 7px; font-size: 13px;
-  font-weight: 600; color: var(--ink); margin-bottom: 8px; }
-.pl-tn-frame { position: relative; height: 170px; border-radius: 6px; overflow: hidden;
-  border: 1px solid var(--hair); }
-.pl-tn-layer { position: absolute; inset: 0; overflow: hidden; display: flex; align-items: flex-end; }
-.pl-tn-top { border-right: 2px solid var(--paper); }
-.pl-tn-year { position: relative; margin: 10px; font-family: var(--mono); font-size: 12px;
-  font-weight: 500; color: #fff; background: rgba(0,0,0,0.38); padding: 2px 8px; border-radius: 3px; }
+.pl-tn { margin-bottom: 34px; }
+.pl-tn-frame { position: relative; height: 210px; border-radius: 7px; overflow: hidden;
+  border: 1px solid var(--rule); }
+.pl-tn-layer { position: absolute; inset: 0; display: flex; align-items: flex-end; }
+.pl-tn-top { overflow: hidden; }
+.pl-tn-handle { position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--paper); transform: translateX(-1px);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.18); }
+.pl-tn-year { position: relative; margin: 12px; font-family: var(--mono);
+  font-size: 11.5px; color: #fff; background: rgba(0,0,0,.42);
+  padding: 3px 9px; border-radius: 3px; }
 .pl-tn-range { position: absolute; inset: 0; width: 100%; height: 100%;
   opacity: 0; cursor: ew-resize; margin: 0; }
-.pl-tn-caps { display: flex; flex-direction: column; gap: 3px; font-size: 12px;
-  color: var(--faint); margin-top: 9px; }
+.pl-tn-caps { display: flex; flex-direction: column; gap: 3px; font-size: 13px;
+  color: var(--faint); margin-top: 10px; }
 .pl-tn-caps b { font-family: var(--mono); font-weight: 500; color: var(--ink); }
-.pl-tn-note { font-size: 11px; color: #9AA59D; font-style: italic; margin-top: 8px; line-height: 1.4; }
+.pl-tn-note { font-size: 12px; color: #9AA59D; margin: 8px 0 0; max-width: 54ch; }
 
-/* category ledger: left rail encodes status */
-.pl-ledger { border-top: 1px solid var(--hair); }
-.pl-cat { background: var(--card); border: 1px solid var(--hair); border-left: 3px solid;
-  border-radius: 4px; margin: 8px 0; overflow: hidden; }
-.pl-cat-head { display: flex; align-items: center; gap: 11px; width: 100%;
-  background: none; border: none; padding: 12px 13px; cursor: pointer;
-  font-family: var(--body); color: var(--ink); text-align: left; }
-.pl-cat-icon { width: 32px; height: 32px; border-radius: 4px; display: grid;
+/* category cards */
+.pl-cat { background: var(--card); border: 1px solid var(--hair);
+  border-left: 3px solid var(--rail); border-radius: 6px; margin-bottom: 9px;
+  overflow: hidden; transition: box-shadow .14s; }
+.pl-cat.open { box-shadow: 0 1px 2px rgba(22,35,29,.05), 0 10px 26px -20px rgba(22,35,29,.4); }
+.pl-cat-head { display: flex; align-items: center; gap: 12px; width: 100%;
+  background: none; border: none; padding: 13px 15px; cursor: pointer;
+  font: inherit; color: var(--ink); text-align: left; }
+.pl-cat-icon { width: 30px; height: 30px; border-radius: 5px; display: grid;
   place-items: center; flex-shrink: 0; }
-.pl-cat-text { flex: 1; min-width: 0; }
-.pl-cat-title { font-weight: 600; font-size: 14px; }
-.pl-cat-src { font-family: var(--mono); font-size: 10.5px; margin-top: 2px; letter-spacing: 0.02em; }
-.pl-status { font-family: var(--mono); font-size: 10.5px; font-weight: 500;
-  padding: 3px 8px; border-radius: 3px; white-space: nowrap; letter-spacing: 0.02em; }
-.pl-cat-body { padding: 2px 14px 12px; border-top: 1px solid var(--hair); }
-.pl-row { display: flex; justify-content: space-between; gap: 14px; padding: 8px 0;
-  font-size: 13px; border-bottom: 1px dotted var(--hair); }
-.pl-row-last { border-bottom: none; }
-.pl-row-key { color: var(--faint); flex-shrink: 0; }
-.pl-row-val { color: var(--ink); text-align: right; font-weight: 500;
-  font-variant-numeric: tabular-nums; }
-.pl-offline { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.55;
-  color: ${T.check}; margin-top: 10px; background: rgba(46,110,142,0.07);
-  padding: 11px 12px; border-radius: 4px; }
+.pl-cat-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pl-cat-title { font-weight: 600; font-size: 14.5px; letter-spacing: -0.005em; }
+.pl-cat-src { font-family: var(--mono); font-size: 10.5px; margin-top: 1px; }
+.pl-status { font-family: var(--mono); font-size: 10.5px; padding: 3px 8px;
+  border-radius: 3px; white-space: nowrap; }
+.pl-cat-body { padding: 0 15px 14px 57px; }
+.pl-reading { font-size: 14px; color: var(--body); margin: 0 0 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--hair); max-width: 52ch; }
+.pl-rows { margin: 0; }
+.pl-row { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0;
+  border-bottom: 1px dotted var(--hair); }
+.pl-row:last-child { border-bottom: none; }
+.pl-row dt { font-size: 13px; color: var(--faint); margin: 0; }
+.pl-row dd { margin: 0; font-size: 13px; color: var(--ink); text-align: right;
+  font-weight: 500; font-variant-numeric: tabular-nums; }
+.pl-offline { display: flex; gap: 9px; font-size: 13px; color: ${T.check};
+  margin-top: 12px; background: rgba(42,103,133,.07); padding: 12px 13px;
+  border-radius: 5px; max-width: 54ch; }
 .pl-offline-ic { flex-shrink: 0; margin-top: 2px; }
+.pl-chev { color: #9AA59D; flex-shrink: 0; }
 
-/* motion */
+/* motion + focus */
 .spin { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.pl-enter { animation: rise .28s ease-out; }
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-button:focus-visible { outline: 2px solid var(--contour); outline-offset: 2px; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--contour); outline-offset: 2px; }
 .leaflet-container { font-family: inherit; }
-@media (prefers-reduced-motion: reduce) { .spin, .pl-enter { animation: none; } }
+
+/* ---------- responsive: collapse to one column ---------- */
+@media (max-width: 900px) {
+  .pl-layout { grid-template-columns: 1fr; gap: 22px; }
+  .pl-rail-inner { position: static; }
+  .pl-jump { display: none; }
+  .pl-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+  .pl-doc { max-width: none; }
+  .pl-lede-h { font-size: 31px; }
+}
+@media (max-width: 620px) {
+  .pl-header, .pl-header-slim { padding: 12px 18px; }
+  .pl-main { padding: 22px 18px 8px; }
+  .pl-footer-inner { padding: 18px 18px 28px; }
+  .pl-lede-h { font-size: 27px; }
+  .pl-cat-body { padding-left: 15px; }
+  .pl-facts { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .spin { animation: none; }
+  .pl-sample:hover { transform: none; }
+}
 `;
